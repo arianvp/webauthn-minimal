@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"errors"
+	"fmt"
 )
 
 func getHashAlgorithm(alg COSEAlgorithmIdentifier) crypto.Hash {
@@ -40,7 +41,7 @@ func checkSignature(alg COSEAlgorithmIdentifier, signed, signature []byte, publi
 		case RS256:
 			return rsa.VerifyPKCS1v15(pub, hashType, signed, signature)
 		default:
-			return errors.New("rsa: unsupported alg")
+			return fmt.Errorf("rsa: unsupported alg %d", alg)
 		}
 	case *ecdsa.PublicKey:
 		switch alg {
@@ -49,7 +50,7 @@ func checkSignature(alg COSEAlgorithmIdentifier, signed, signature []byte, publi
 				return errors.New("ecdsa: Invalid signature")
 			}
 		default:
-			return errors.New("ecdsa: unsupported alg")
+			return fmt.Errorf("ecdsa: unsupported alg %d", alg)
 		}
 	case ed25519.PublicKey:
 		switch alg {
@@ -57,6 +58,8 @@ func checkSignature(alg COSEAlgorithmIdentifier, signed, signature []byte, publi
 			if !ed25519.Verify(pub, signed, signature) {
 				return errors.New("ed25519: invalid signature")
 			}
+		default:
+			return fmt.Errorf("ed25519: unsupported alg %d", alg)
 		}
 	default:
 		return errors.New("unsupported public key")
