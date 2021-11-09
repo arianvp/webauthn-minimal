@@ -143,7 +143,7 @@ func (attestation *AuthenticatorAttestationResponse) Verify(challenge, rpID, ori
 }
 
 // steps 10 to 21
-func (response *AuthenticatorAssertionResponse) Verify(challenge, rpID, origin string, verifyUser bool, attestationResponse *AuthenticatorAttestationResponse) error {
+func (response *AuthenticatorAssertionResponse) Verify(challenge, rpID, origin string, verifyUser bool, storedSignCount uint, attestationResponse *AuthenticatorAttestationResponse) error {
 	// steps 10 to 16
 	if err := response.AuthenticatorResponse.Verify("webauthn.get", challenge, rpID, origin, verifyUser); err != nil {
 		return err
