@@ -1,3 +1,3 @@
-module github.com/arianvp/webauthn
+module github.com/arianvp/webauthn-minimal
 
 go 1.16
