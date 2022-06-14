@@ -4,10 +4,15 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"errors"
 	"fmt"
 )
+
+func getCurve(alg COSEAlgorithmIdentifier) elliptic.Curve {
+	return nil
+}
 
 func getHashAlgorithm(alg COSEAlgorithmIdentifier) crypto.Hash {
 	switch alg {
@@ -46,6 +51,10 @@ func checkSignature(alg COSEAlgorithmIdentifier, signed, signature []byte, publi
 	case *ecdsa.PublicKey:
 		switch alg {
 		case ES256, ES384, ES512:
+			if pub.Curve != getCurve(alg) {
+				// TODO: should this  check happen earlier?
+				return errors.New("ecdsa: Unexpected curve")
+			}
 			if !ecdsa.VerifyASN1(pub, signed, signature) {
 				return errors.New("ecdsa: Invalid signature")
 			}
