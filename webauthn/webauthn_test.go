@@ -3,6 +3,7 @@ package webauthn
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/binary"
 	"testing"
 )
@@ -36,5 +37,12 @@ func TestAuthenticatorData(t *testing.T) {
 	if err := binary.Write(bufWriter, binary.BigEndian, &data); err != nil {
 		t.Fatal(err)
 	}
+}
 
+func FuzzCheckSignature(f *testing.F) {
+	f.Fuzz(func(f *testing.T, alg uint8, signed, signature, publicKey []byte) {
+		alg_ := COSEAlgorithmIdentifier(alg)
+		publicKey_, _ := x509.ParsePKIXPublicKey(publicKey)
+		checkSignature(alg_, signed, signature, publicKey_)
+	})
 }

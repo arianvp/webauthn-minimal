@@ -161,6 +161,7 @@ func (response *AuthenticatorAssertionResponse) Verify(challenge, rpID, origin s
 		return err
 	}
 	// 20. TODO: Check storedSignCount
+
 	// 21. If all the above steps are successful, continue with the authentication ceremony as appropriate
 	return nil
 }

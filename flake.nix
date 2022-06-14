@@ -25,13 +25,13 @@
         defaultPackage = pkgs.buildGoModule {
           pname = "webauthn-minimal";
           version = "0.0.1";
-          src =  pkgs.lib.cleanSource ./.;
+          src =  ./.;
         };
 
         devShell = with pkgs; mkShell {
           nativeBuildInputs = [
             bashInteractive
-            go
+            go_1_18
           ];
         };
       });
