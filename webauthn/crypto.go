@@ -14,27 +14,31 @@ func getCurve(alg COSEAlgorithmIdentifier) elliptic.Curve {
 	return nil
 }
 
-func getHashAlgorithm(alg COSEAlgorithmIdentifier) crypto.Hash {
+func getHashAlgorithm(alg COSEAlgorithmIdentifier) (crypto.Hash, error) {
 	switch alg {
 	case ES256:
-		return crypto.SHA256
+		return crypto.SHA256, nil
 	case PS256:
-		return crypto.SHA256
+		return crypto.SHA256, nil
 	case RS256:
-		return crypto.SHA256
+		return crypto.SHA256, nil
 	case EdDSA:
-		return crypto.SHA256
+		return crypto.SHA256, nil
 	case ES384:
-		return crypto.SHA384
+		return crypto.SHA384, nil
 	case ES512:
-		return crypto.SHA512
+		return crypto.SHA512, nil
 	default:
-		panic("should never happen")
+		return 0, fmt.Errorf("unknown COSEAlgorithmIdentifier: %d", alg)
+
 	}
 }
 
 func checkSignature(alg COSEAlgorithmIdentifier, signed, signature []byte, publicKey crypto.PublicKey) error {
-	hashType := getHashAlgorithm(alg)
+	hashType, err := getHashAlgorithm(alg)
+	if err != nil {
+		return err
+	}
 	h := hashType.New()
 	h.Write(signed)
 	signed = h.Sum(nil)
