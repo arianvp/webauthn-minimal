@@ -10,8 +10,15 @@ import (
 	"fmt"
 )
 
-func getCurve(alg COSEAlgorithmIdentifier) elliptic.Curve {
-	return nil
+func getCurve(alg COSEAlgorithmIdentifier) (elliptic.Curve, error) {
+	switch alg {
+	case ES256:
+		return elliptic.P256(), nil
+	case ES384:
+		return elliptic.P384(), nil
+	default:
+		return nil, fmt.Errorf("unsupported COSEAlgorithmIdentifier: %d", alg)
+	}
 }
 
 func getHashAlgorithm(alg COSEAlgorithmIdentifier) (crypto.Hash, error) {
@@ -26,8 +33,6 @@ func getHashAlgorithm(alg COSEAlgorithmIdentifier) (crypto.Hash, error) {
 		return crypto.SHA256, nil
 	case ES384:
 		return crypto.SHA384, nil
-	case ES512:
-		return crypto.SHA512, nil
 	default:
 		return 0, fmt.Errorf("unknown COSEAlgorithmIdentifier: %d", alg)
 
@@ -53,17 +58,15 @@ func checkSignature(alg COSEAlgorithmIdentifier, signed, signature []byte, publi
 			return fmt.Errorf("rsa: unsupported alg %d", alg)
 		}
 	case *ecdsa.PublicKey:
-		switch alg {
-		case ES256, ES384, ES512:
-			if pub.Curve != getCurve(alg) {
-				// TODO: should this  check happen earlier?
-				return errors.New("ecdsa: Unexpected curve")
-			}
-			if !ecdsa.VerifyASN1(pub, signed, signature) {
-				return errors.New("ecdsa: Invalid signature")
-			}
-		default:
-			return fmt.Errorf("ecdsa: unsupported alg %d", alg)
+		expectedCurve, err := getCurve(alg)
+		if err != nil {
+			return err
+		}
+		if pub.Curve != expectedCurve {
+			return errors.New("ecdsa: Unexpected curve")
+		}
+		if !ecdsa.VerifyASN1(pub, signed, signature) {
+			return errors.New("ecdsa: Invalid signature")
 		}
 	case ed25519.PublicKey:
 		switch alg {

@@ -36,7 +36,6 @@ const (
 	ES256 COSEAlgorithmIdentifier = -7
 	EdDSA COSEAlgorithmIdentifier = -8
 	ES384 COSEAlgorithmIdentifier = -35
-	ES512 COSEAlgorithmIdentifier = -36
 	PS256 COSEAlgorithmIdentifier = -37
 	RS256 COSEAlgorithmIdentifier = -257
 )
