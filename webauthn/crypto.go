@@ -10,6 +10,16 @@ import (
 	"fmt"
 )
 
+type COSEAlgorithmIdentifier int32
+
+const (
+	ES256 COSEAlgorithmIdentifier = -7
+	EdDSA COSEAlgorithmIdentifier = -8
+	ES384 COSEAlgorithmIdentifier = -35
+	PS256 COSEAlgorithmIdentifier = -37
+	RS256 COSEAlgorithmIdentifier = -257
+)
+
 func getCurve(alg COSEAlgorithmIdentifier) (elliptic.Curve, error) {
 	switch alg {
 	case ES256:
