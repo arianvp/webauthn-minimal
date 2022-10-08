@@ -8,16 +8,124 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"math/big"
+
+	"github.com/fxamacker/cbor/v2"
 )
 
-func getCurve(alg COSEAlgorithmIdentifier) (elliptic.Curve, error) {
-	switch alg {
-	case ES256:
-		return elliptic.P256(), nil
-	case ES384:
-		return elliptic.P384(), nil
+type COSEKeyType int
+
+const (
+	OKP COSEKeyType = 1
+	EC2 COSEKeyType = 2
+	RSA COSEKeyType = 3
+)
+
+type PublicKeyData struct {
+	KeyType   COSEKeyType             `cbor:"1,keyasint" json:"kty"`
+	Algorithm COSEAlgorithmIdentifier `cbor:"3,keyasint" json:"alg"`
+	Curve     COSEEllipticCurve       `cbor:"-1,keyasint,omitempty" json:"crv"`
+	XCoord    []byte                  `cbor:"-2,keyasint,omitempty" json:"x"`
+	YCoord    []byte                  `cbor:"-3,keyasint,omitempty" json:"y"`
+	Modulus   []byte                  `cbor:"-1,keyasint,omitempty" json:"n"`
+	Exponent  []byte                  `cbor:"-2,keyasint,omitempty" json:"e"`
+}
+
+// The COSE Elliptic Curves
+// https://www.iana.org/assignments/cose/cose.xhtml#elliptic-curves
+type COSEEllipticCurve int
+
+const (
+	// EC2 NIST P-256 also known as secp256r1
+	P256    COSEEllipticCurve = 1
+	P384    COSEEllipticCurve = 2
+	Ed25519 COSEEllipticCurve = 6
+)
+
+type COSEAlgorithmIdentifier int64
+
+const (
+	EdDSA COSEAlgorithmIdentifier = -8
+	ES256 COSEAlgorithmIdentifier = -7
+	ES384 COSEAlgorithmIdentifier = -35
+	PS256 COSEAlgorithmIdentifier = -37
+	RS256 COSEAlgorithmIdentifier = -257
+)
+
+func ParsePublicKey(publicKeyBytes []byte) (crypto.PublicKey, COSEAlgorithmIdentifier, error) {
+	keyData := new(PublicKeyData)
+	if err := cbor.Unmarshal(publicKeyBytes, keyData); err != nil {
+		return nil, 0, err
+	}
+	return COSEKeyToPublicKey(keyData)
+}
+
+func COSEKeyToPublicKey(keyData *PublicKeyData) (publicKey crypto.PublicKey, alg COSEAlgorithmIdentifier, err error) {
+	switch keyData.KeyType {
+	case OKP:
+		switch keyData.Curve {
+		case Ed25519:
+			publicKey = ed25519.PublicKey(keyData.XCoord)
+			switch keyData.Algorithm {
+			case EdDSA:
+				alg = keyData.Algorithm
+				return
+			default:
+				err = fmt.Errorf("invalid algorithm %d for curve %d", keyData.Algorithm, keyData.Curve)
+				return
+			}
+		default:
+			err = fmt.Errorf("invalid curve %d for key type %d", keyData.Curve, keyData.KeyType)
+			return
+		}
+	case EC2:
+		var curve elliptic.Curve
+		switch keyData.Curve {
+		case P256:
+			switch keyData.Algorithm {
+			case ES256:
+				alg = keyData.Algorithm
+			default:
+				err = fmt.Errorf("invalid algorithm %d for curve %d", keyData.Algorithm, keyData.Curve)
+				return
+			}
+			curve = elliptic.P256()
+		case P384:
+			switch keyData.Algorithm {
+			case ES384:
+				alg = keyData.Algorithm
+			default:
+				err = fmt.Errorf("invalid algorithm %d for curve %d", keyData.Algorithm, keyData.Curve)
+				return
+			}
+			curve = elliptic.P384()
+		default:
+			err = fmt.Errorf("invalid curve %d for key type %d", keyData.Curve, keyData.KeyType)
+			return
+		}
+		publicKey = &ecdsa.PublicKey{
+			Curve: curve,
+			X:     new(big.Int).SetBytes(keyData.XCoord),
+			Y:     new(big.Int).SetBytes(keyData.YCoord),
+		}
+		return
+	case RSA:
+		switch keyData.Algorithm {
+		case PS256:
+		case RS256:
+			alg = keyData.Algorithm
+		default:
+			err = fmt.Errorf("invalid algorithm %d for key type %d", keyData.Algorithm, keyData.KeyType)
+			return
+		}
+		publicKey = &rsa.PublicKey{
+			N: new(big.Int).SetBytes(keyData.Modulus),
+			E: int(uint(keyData.Exponent[2]) | uint(keyData.Exponent[1])<<8 | uint(keyData.Exponent[0])<<16),
+		}
+		return
 	default:
-		return nil, fmt.Errorf("unsupported COSEAlgorithmIdentifier: %d", alg)
+		err = fmt.Errorf("unknown key type %d", keyData.KeyType)
+		return
 	}
 }
 
@@ -30,7 +138,7 @@ func getHashAlgorithm(alg COSEAlgorithmIdentifier) (crypto.Hash, error) {
 	case RS256:
 		return crypto.SHA256, nil
 	case EdDSA:
-		return crypto.SHA256, nil
+		return 0, nil
 	case ES384:
 		return crypto.SHA384, nil
 	default:
@@ -39,7 +147,7 @@ func getHashAlgorithm(alg COSEAlgorithmIdentifier) (crypto.Hash, error) {
 	}
 }
 
-func checkSignature(alg COSEAlgorithmIdentifier, signed, signature []byte, publicKey crypto.PublicKey) error {
+func VerifySignature(publicKey crypto.PublicKey, alg COSEAlgorithmIdentifier, signed, signature []byte) error {
 	hashType, err := getHashAlgorithm(alg)
 	if err != nil {
 		return err
@@ -58,13 +166,6 @@ func checkSignature(alg COSEAlgorithmIdentifier, signed, signature []byte, publi
 			return fmt.Errorf("rsa: unsupported alg %d", alg)
 		}
 	case *ecdsa.PublicKey:
-		expectedCurve, err := getCurve(alg)
-		if err != nil {
-			return err
-		}
-		if pub.Curve != expectedCurve {
-			return errors.New("ecdsa: Unexpected curve")
-		}
 		if !ecdsa.VerifyASN1(pub, signed, signature) {
 			return errors.New("ecdsa: Invalid signature")
 		}

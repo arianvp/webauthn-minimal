@@ -11,7 +11,7 @@
           pname = "webauthn-minimal";
           version = "0.0.1";
           src = ./.;
-          vendorSha256 = null;
+          vendorSha256 = "sha256-TDKN+Dce7kpFjzxrGv8m6H7HDoTSnHz83CfSvZhNwT0=";
         };
       });
 }
