@@ -2,14 +2,15 @@ package webauthn
 
 import (
 	"bytes"
-	"crypto"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/fxamacker/cbor/v2"
+	"github.com/mitchellh/mapstructure"
 )
 
 type Base64URLString []byte
@@ -40,8 +41,8 @@ type AttestedCredentialDataHeader struct {
 
 type AttestedCredentialData struct {
 	AttestedCredentialDataHeader
-	CredentialID        []byte
-	CredentialPublicKey []byte
+	CredentialID        []byte        // REQUIRED
+	CredentialPublicKey PublicKeyData // OPTIONAL . The actual public key might be in the attestation statement instead for some attestation formats
 }
 type AuthenticatorData struct {
 	AuthenticatorDataHeader
@@ -50,10 +51,11 @@ type AuthenticatorData struct {
 	// ignore other fields
 }
 
-func ParseAndVerifyAuthenticatorData(r io.Reader, rpID string, flags AuthenticatorFlags) (*AuthenticatorData, error) {
+func ParseAndVerifyAuthenticatorData(authDataBytes []byte, rpID string, flags AuthenticatorFlags) (*AuthenticatorData, error) {
 	authData := new(AuthenticatorData)
+	r := bytes.NewReader(authDataBytes)
 
-	if err := binary.Read(r, binary.BigEndian, authData.AuthenticatorDataHeader); err != nil {
+	if err := binary.Read(r, binary.BigEndian, &authData.AuthenticatorDataHeader); err != nil {
 		return nil, err
 	}
 	// 12 / 14
@@ -62,13 +64,22 @@ func ParseAndVerifyAuthenticatorData(r io.Reader, rpID string, flags Authenticat
 	}
 
 	// 13 / 15 |  14 / 16
-	if authData.Flags&flags == 0 {
+	if flags != 0 && authData.Flags&flags == 0 {
 		return nil, errors.New("flags did not match")
 	}
 
 	// Decode credentials
 	if authData.Flags&FlagAttestedCredentialData != 0 {
-
+		if err := binary.Read(r, binary.BigEndian, &authData.AttestedCredentialDataHeader); err != nil {
+			return nil, err
+		}
+		authData.CredentialID = make([]byte, authData.CredentialIDLength)
+		if _, err := io.ReadFull(r, authData.CredentialID); err != nil {
+			return nil, err
+		}
+		if err := cbor.NewDecoder(r).Decode(&authData.CredentialPublicKey); err != nil {
+			return nil, err
+		}
 	}
 	return authData, nil
 }
@@ -84,7 +95,7 @@ type AuthenticatorResponse struct {
 	ClientDataJSON Base64URLString `json:"clientDataJSON"`
 }
 
-func ParseAndVerifyClientData(clientDataJSON []byte, typ, challenge, rpID, origin string) (*ClientData, error) {
+func ParseAndVerifyClientData(clientDataJSON []byte, typ, challenge string, allowedOrigins []string) (*ClientData, error) {
 	// 6 / 10
 	var clientData ClientData
 	if err := json.Unmarshal(clientDataJSON, &clientData); err != nil {
@@ -100,10 +111,13 @@ func ParseAndVerifyClientData(clientDataJSON []byte, typ, challenge, rpID, origi
 		return nil, errors.New("challenge mismatch")
 	}
 	// 9 / 13
-	if clientData.Origin != origin {
-		return nil, errors.New("origin mismatch")
+	for _, origin := range allowedOrigins {
+		if clientData.Origin == origin {
+			return &clientData, nil
+		}
 	}
-	return &clientData, nil
+	return nil, errors.New("origin mismatch")
+
 }
 
 type AuthenticatorAttestationResponse struct {
@@ -113,9 +127,29 @@ type AuthenticatorAttestationResponse struct {
 }
 
 type AttestationObject struct {
-	Format               string          `cbor:"fmt"`
-	AttestationStatement cbor.RawMessage `cbor:"attStmt"`
-	AuthenticatorData    []byte          `cbor:"authData"`
+	Format string `cbor:"fmt"`
+	// AttestationStatement cbor.RawMessage `cbor:"attStmt"`
+	AttestationStatement map[string]interface{} `cbor:"attStmt"`
+	AuthenticatorData    []byte                 `cbor:"authData"`
+}
+
+type AppleAppAttestAttestationStatement struct {
+	CretificateChain [][]byte `cbor:"x5c"` // [ credCert: bytes, * (caCert: bytes) ]
+	Receipt          []byte   `cbor:"receipt"`
+}
+
+func (attStmt *AppleAppAttestAttestationStatement) Verify() error {
+	return errors.New("unimplemented")
+}
+
+type PackedAttestationStatement struct {
+	Algorithm        COSEAlgorithmIdentifier `cbor:"alg"`
+	Signature        []byte                  `cbor:"sig"`
+	CertificateChain [][]byte                `cbor:"x5c"`
+}
+
+func (attStmt *PackedAttestationStatement) Verify() error {
+	return errors.New("unimplemented")
 }
 
 func ParseAndVerifyAttestationObject(attObject []byte) (*AttestationObject, error) {
@@ -123,26 +157,48 @@ func ParseAndVerifyAttestationObject(attObject []byte) (*AttestationObject, erro
 	if err := cbor.Unmarshal(attObject, &attestationObject); err != nil {
 		return nil, err
 	}
+	var attStmt interface{ Verify() error }
+	switch attestationObject.Format {
+	case "apple-appattest":
+		/// TODO: For apple we also want to both verify and potenitally _store_ the receipt. How to return the receipt?
+		attStmt = new(AppleAppAttestAttestationStatement)
+
+	case "packed":
+		attStmt = new(PackedAttestationStatement)
+	default:
+		return nil, fmt.Errorf("unsupported attestation format: %s", attestationObject.Format)
+	}
+	if err := mapstructure.Decode(attestationObject.AttestationStatement, &attStmt); err != nil {
+		return nil, err
+	}
+	if err := attStmt.Verify(); err != nil {
+		return nil, err
+	}
 	return &attestationObject, nil
 }
 
-func (r *AuthenticatorAttestationResponse) Verify(challenge, rpID, origin string, flags AuthenticatorFlags, pubKeyCredParams []COSEAlgorithmIdentifier) (*Credential, error) {
+// TODO: Slightly change interface:
+// There is a list of registered RP IDs  and a RP ID has a list of allowed origins
+func (r *AuthenticatorAttestationResponse) Verify(challenge, rpID string, allowedOrigins []string, flags AuthenticatorFlags, pubKeyCredParams []COSEAlgorithmIdentifier) (*Credential, error) {
 	// steps 6 to 14
-	if _, err := ParseAndVerifyClientData(r.ClientDataJSON, "webauthn.create", challenge, rpID, origin); err != nil {
+	if _, err := ParseAndVerifyClientData(r.ClientDataJSON, "webauthn.create", challenge, allowedOrigins); err != nil {
 		return nil, err
 	}
 
-	attObject, err := ParseAndVerifyAttestationObject(r.AttestationObject)
+	var attestationObject AttestationObject
+	if err := cbor.Unmarshal(r.AttestationObject, &attestationObject); err != nil {
+		return nil, err
+	}
+
+	// So the app-attest docs are a bit vague whether AttestedCredentialData also contains the public key or not
+	// as they say you need to extract the public key from credCert. Very odd!
+	authData, err := ParseAndVerifyAuthenticatorData(attestationObject.AuthenticatorData, rpID, flags)
 	if err != nil {
 		return nil, err
 	}
 
-	authData, err := ParseAndVerifyAuthenticatorData(bytes.NewReader(attObject.AuthenticatorData), rpID, flags)
-	if err != nil {
-		return nil, err
-	}
-	publicKeyBytes := authData.AttestedCredentialData.CredentialPublicKey
-	publicKey, alg, err := ParsePublicKey(publicKeyBytes)
+	publicKeyData := authData.AttestedCredentialData.CredentialPublicKey
+	publicKey, err := COSEKeyToPublicKey(&publicKeyData)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +207,7 @@ func (r *AuthenticatorAttestationResponse) Verify(challenge, rpID, origin string
 
 	found := false
 	for _, v := range pubKeyCredParams {
-		if found = v == alg; found {
+		if found = v == publicKey.Algorithm; found {
 			break
 		}
 	}
@@ -159,10 +215,12 @@ func (r *AuthenticatorAttestationResponse) Verify(challenge, rpID, origin string
 		return nil, errors.New("publicKeyAlgorithm was not one of pubKeyCredParams")
 	}
 	return &Credential{
-		ID:                 authData.AttestedCredentialData.CredentialID,
-		PublicKeyAlgorithm: alg,
-		PublicKey:          publicKey,
-		Transports:         r.Transports,
+		PublicKeyCredentialDescriptor: PublicKeyCredentialDescriptor{
+			Type:       "public-key",
+			Id:         authData.CredentialID,
+			Transports: r.Transports,
+		},
+		PublicKey: publicKey,
 	}, nil
 }
 
@@ -175,13 +233,13 @@ type AuthenticatorAssertionResponse struct {
 }
 
 // steps 10 to 21
-func (r *AuthenticatorAssertionResponse) Verify(challenge, rpID, origin string, flags AuthenticatorFlags, credential *Credential) (uint32, error) {
+func (r *AuthenticatorAssertionResponse) Verify(challenge, rpID string, allowedOrigins []string, flags AuthenticatorFlags, credential *Credential) (uint32, error) {
 	// steps 10 to 16
-	if _, err := ParseAndVerifyClientData(r.ClientDataJSON, "webauthn.get", challenge, rpID, origin); err != nil {
+	if _, err := ParseAndVerifyClientData(r.ClientDataJSON, "webauthn.get", challenge, allowedOrigins); err != nil {
 		return 0, err
 	}
 
-	authData, err := ParseAndVerifyAuthenticatorData(bytes.NewReader(r.AuthenticatorData), rpID, flags)
+	authData, err := ParseAndVerifyAuthenticatorData(r.AuthenticatorData, rpID, flags)
 	if err != nil {
 		return 0, err
 	}
@@ -201,14 +259,8 @@ func (r *AuthenticatorAssertionResponse) Verify(challenge, rpID, origin string, 
 }
 
 type Credential struct {
-	ID                 []byte
-	PublicKey          crypto.PublicKey
-	PublicKeyAlgorithm COSEAlgorithmIdentifier
-	Transports         []string
-}
-
-func (c *Credential) VerifySignature(signed, signature []byte) error {
-	return VerifySignature(c.PublicKey, c.PublicKeyAlgorithm, signed, signature)
+	PublicKeyCredentialDescriptor
+	PublicKey
 }
 
 type CreatePublicKeyCredential struct {
@@ -216,14 +268,6 @@ type CreatePublicKeyCredential struct {
 	Id       string                           `json:"id"`
 	RawId    []byte                           `json:"rawId"`
 	Response AuthenticatorAttestationResponse `json:"response"`
-}
-
-func (cred *CreatePublicKeyCredential) Describe() PublicKeyCredentialDescriptor {
-	return PublicKeyCredentialDescriptor{
-		Type:       cred.Type,
-		Id:         cred.RawId,
-		Transports: cred.Response.Transports,
-	}
 }
 
 type GetPublicKeyCredential struct {
